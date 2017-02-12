@@ -11,6 +11,10 @@ import csv
 import time
 
 
+class FastMigration(object):
+    pass
+
+
 class CSVLoader(object):
 
     def __init__(self, source, **kwargs):
