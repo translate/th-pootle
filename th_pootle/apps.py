@@ -18,3 +18,4 @@ class THPootleConfig(AppConfig):
 
     def ready(self):
         importlib.import_module("th_pootle.models")
+        importlib.import_module("th_pootle.fast_migration.providers")
