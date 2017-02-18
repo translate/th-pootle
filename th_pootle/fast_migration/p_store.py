@@ -11,10 +11,77 @@ import csv
 from django.utils.functional import cached_property
 
 from pootle.core.user import get_system_user_id
-from pootle_statistics.models import SubmissionTypes
 from pootle_store.models import Unit
 
 from th_pootle.utils import FastMigration, MySqlCSVWriter, UnicodeCSVReader
+
+
+class UnitChangeChangedByMigration0033(FastMigration):
+
+    @cached_property
+    def sysuser(self):
+        return get_system_user_id()
+
+    @property
+    def dump(self):
+        return {
+            "creation_submissions": dict(
+                table="pootle_app_submission",
+                columns=["unit_id", "submitter_id"],
+                where=dict(
+                    type=10,
+                    submitter_id__ne=self.sysuser)),
+            "unit_pks": dict(
+                columns=["id"],
+                table="pootle_store_unit")}
+
+    schema = {}
+    data = {}
+    create = {}
+    load = {}
+    alter = {}
+
+    @cached_property
+    def counter(self):
+        class Counter(object):
+            count = 0
+        return Counter()
+
+    def unit_mangler(self, unit):
+        self.counter.count += 1
+        return (
+            str(self.counter.count),
+            str(self.parsed["creation_submissions"].get(
+                unit, self.sysuser)),
+            unit)
+
+    @property
+    def mangle(self):
+        reader_kwargs = dict(
+            lineterminator='\n',
+            escapechar="\\",
+            doublequote=False)
+        writer_kwargs = dict(
+            lineterminator='\n',
+            escapechar="\\",
+            quotechar='',
+            doublequote=False,
+            quoting=csv.QUOTE_NONE)
+        return {
+            "units": dict(
+                source="unit_pks",
+                target="new_units",
+                parse=["creation_submissions"],
+                mangler=self.unit_mangler,
+                reader_class=UnicodeCSVReader,
+                reader_kwargs=reader_kwargs,
+                writer_class=MySqlCSVWriter,
+                writer_kwargs=writer_kwargs)}
+
+    load = {
+        "new_units": dict(
+            table="pootle_store_unit_source",
+            force=True)}
 
 
 class UnitSourceCreatedByMigration0033(FastMigration):
@@ -30,7 +97,7 @@ class UnitSourceCreatedByMigration0033(FastMigration):
                 table="pootle_app_submission",
                 columns=["unit_id", "submitter_id"],
                 where=dict(
-                    type=SubmissionTypes.UNIT_CREATE,
+                    type=10,
                     submitter_id__ne=self.sysuser)),
             "unit_pks": dict(
                 columns=["id"],
@@ -92,7 +159,7 @@ class UnitCreatedByMigration0027(FastMigration):
             table="pootle_app_submission",
             columns=["unit_id", "submitter_id"],
             where=dict(
-                type=SubmissionTypes.UNIT_CREATE,
+                type=10,
                 submitter_id__ne=get_system_user_id())),
         "unit_data": dict(
             table="pootle_store_unit")}
