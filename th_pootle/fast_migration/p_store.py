@@ -7,16 +7,55 @@
 # AUTHORS file for copyright and authorship information.
 
 import csv
+from collections import OrderedDict
 
 from django.utils.functional import cached_property
 
 from pootle.core.user import get_system_user_id
+from pootle_statistics.models import SubmissionTypes
 from pootle_store.models import Unit
 
 from th_pootle.utils import FastMigration, MySqlCSVWriter, UnicodeCSVReader
 
 
-class UnitChangeChangedByMigration0033(FastMigration):
+class UnitMigration0038(FastMigration):
+
+    @property
+    def dump(self):
+        return {
+            "units": dict(
+                table="pootle_store_unit",
+                columns=[
+                    "id",
+                    "store_id",
+                    "index",
+                    "unitid",
+                    "unitid_hash",
+                    "source_f",
+                    "source_hash",
+                    "source_wordcount",
+                    "source_length",
+                    "target_f",
+                    "target_wordcount",
+                    "target_length",
+                    "developer_comment",
+                    "translator_comment",
+                    "locations",
+                    "context",
+                    "state",
+                    "mtime",
+                    "creation_time",
+                    "revision"])}
+    data = {}
+    create = {}
+    alter = {}
+    load = {
+        "units": dict(
+            table="pootle_store_unit",
+            force=True)}
+
+
+class UnitChangeMigration0037(FastMigration):
 
     @cached_property
     def sysuser(self):
@@ -25,17 +64,26 @@ class UnitChangeChangedByMigration0033(FastMigration):
     @property
     def dump(self):
         return {
-            "creation_submissions": dict(
+            "subs_by_unit": dict(
                 table="pootle_app_submission",
-                columns=["unit_id", "submitter_id"],
-                where=dict(
-                    type=10,
-                    submitter_id__ne=self.sysuser)),
-            "unit_pks": dict(
-                columns=["id"],
-                table="pootle_store_unit")}
+                columns=["unit_id", "type"],
+                order_by=["unit_id", "-creation_time", "-id"]),
+            "units": dict(
+                table="pootle_store_unit",
+                columns=[
+                    "id",
+                    "submitted_by_id",
+                    "submitted_on",
+                    "commented_by_id",
+                    "commented_on",
+                    "reviewed_by_id",
+                    "reviewed_on"])}
+    schema = {
+        "unit_change": dict(
+            table="pootle_store_unit_change",
+            columns=["column_name"],
+            optionally_enclose=None)}
 
-    schema = {}
     data = {}
     create = {}
     load = {}
@@ -47,19 +95,69 @@ class UnitChangeChangedByMigration0033(FastMigration):
             count = 0
         return Counter()
 
-    def unit_mangler(self, unit):
+    @cached_property
+    def indices(self):
+        keys = self.unitmeta.keys()
+        return {
+            k: keys.index(k)
+            for k in keys
+            if k in keys}
+
+    @cached_property
+    def changed_with(self):
+        return dict(self.parsed["changed_with"])
+
+    def unit_mangler(self, *unit):
+        if all(x == "\N" for x in unit[1:]):
+            return
         self.counter.count += 1
-        return (
-            str(self.counter.count),
-            str(self.parsed["creation_submissions"].get(
-                unit, self.sysuser)),
-            unit)
+        unit_values = {
+            k: unit[i]
+            for i, k
+            in enumerate(
+                ["id",
+                 "submitted_by_id",
+                 "submitted_on",
+                 "commented_by_id",
+                 "commented_on",
+                 "reviewed_by_id",
+                 "reviewed_on"])}
+        unit_values["unit_id"] = unit_values["id"]
+        unit_values["changed_with"] = self.changed_with.get(
+            unit_values["id"], SubmissionTypes.SYSTEM)
+        unit_values["id"] = self.counter.count
+        return [str(unit_values[k]) for k in self.unitmeta.keys()]
+
+    @property
+    def unitmeta(self):
+        return self.parsed["schema__unit_change"]
+
+    @property
+    def data(self):
+        return {
+            "unit_change": dict(
+                schema=True,
+                ordered=True)}
+
+    @cached_property
+    def change_counter(self):
+        class ChangeCounter(object):
+            last_unitid = 0
+            change = None
+        return ChangeCounter()
+
+    def change_mangler(self, unitid, sub_type):
+        """sets the revision for the last sub of each unit"""
+        if self.change_counter.last_unitid != unitid:
+            self.change_counter.last_unitid = unitid
+            if sub_type != str(SubmissionTypes.SYSTEM):
+                return [unitid, sub_type]
 
     @property
     def mangle(self):
         reader_kwargs = dict(
             lineterminator='\n',
-            escapechar="\\",
+            escapechar="",
             doublequote=False)
         writer_kwargs = dict(
             lineterminator='\n',
@@ -67,20 +165,24 @@ class UnitChangeChangedByMigration0033(FastMigration):
             quotechar='',
             doublequote=False,
             quoting=csv.QUOTE_NONE)
-        return {
-            "units": dict(
-                source="unit_pks",
-                target="new_units",
-                parse=["creation_submissions"],
-                mangler=self.unit_mangler,
-                reader_class=UnicodeCSVReader,
-                reader_kwargs=reader_kwargs,
-                writer_class=MySqlCSVWriter,
-                writer_kwargs=writer_kwargs)}
+        return OrderedDict(
+            (("changed_with",
+              dict(source="subs_by_unit",
+                   target="changed_with",
+                   mangler=self.change_mangler)),
+             ("units",
+              dict(source="units",
+                   target="new_unit_changes",
+                   mangler=self.unit_mangler,
+                   parse=["changed_with"],
+                   reader_class=UnicodeCSVReader,
+                   reader_kwargs=reader_kwargs,
+                   writer_class=MySqlCSVWriter,
+                   writer_kwargs=writer_kwargs))))
 
     load = {
-        "new_units": dict(
-            table="pootle_store_unit_source",
+        "new_unit_changes": dict(
+            table="pootle_store_unit_change",
             force=True)}
 
 
@@ -122,6 +224,14 @@ class UnitSourceCreatedByMigration0033(FastMigration):
             str(self.parsed["creation_submissions"].get(
                 unit, self.sysuser)),
             unit)
+
+    @cached_property
+    def indices(self):
+        keys = self.unitmeta.keys()
+        return {
+            k: keys.index(k)
+            for k in keys
+            if k in keys}
 
     @property
     def mangle(self):
