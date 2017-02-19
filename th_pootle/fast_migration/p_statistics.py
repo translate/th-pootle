@@ -16,6 +16,22 @@ from django.utils.functional import cached_property
 from th_pootle.utils import FastMigration, MySqlCSVWriter, UnicodeCSVReader
 
 
+class StatisticsMigration0011(FastMigration):
+    dump = {
+        "subs_data": dict(
+            table="pootle_app_submission",
+            where=dict(unit_id__gt=0, type__ne=10))}
+    schema = {}
+    mangle = {}
+    data = {}
+    create = {}
+    alter = {}
+    load = {
+        "subs_data": dict(
+            table="pootle_app_submission",
+            force=True)}
+
+
 class StatisticsMigration0008(FastMigration):
     dump = {
         "unit_revisions": dict(
